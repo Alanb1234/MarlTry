@@ -3,7 +3,7 @@ import numpy as np
 import json
 
 class GridWorldGUI:
-    def __init__(self, grid_size=40, cell_size=20):
+    def __init__(self, grid_size=30, cell_size=20):
         pygame.init()
         self.grid_size = grid_size
         self.cell_size = cell_size
