@@ -164,7 +164,7 @@ if __name__ == "__main__":
     trained_agents, best_episode_actions = train_idqn()
     env = MultiAgentGridEnv(
         grid_file='grid_world.json',
-        coverage_radius=2,
+        coverage_radius=7,
         max_steps_per_episode=100,
         num_agents=4,
         initial_positions=[(1, 1), (2, 1), (1, 2), (2, 2)],
