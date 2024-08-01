@@ -6,6 +6,10 @@ from collections import deque
 import random
 import os
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.animation import FFMpegWriter
+
+
 from environment import MultiAgentGridEnv
 import json
 
@@ -99,7 +103,7 @@ class IDQNAgent:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.epsilon = checkpoint['epsilon']
 
-def train_idqn(num_episodes=500, batch_size=32, update_freq=50, save_freq=100, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
+def train_idqn(num_episodes=25, batch_size=32, update_freq=50, save_freq=100, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
     env = MultiAgentGridEnv(
         grid_file='grid_world.json',
         coverage_radius=7,
@@ -117,6 +121,7 @@ def train_idqn(num_episodes=500, batch_size=32, update_freq=50, save_freq=100, e
     episode_rewards = []
     best_reward = float('-inf')
     best_episode_actions = None
+    best_episode_number = None  # Add this line
 
     for episode in range(num_episodes):
         state = env.reset()
@@ -150,6 +155,7 @@ def train_idqn(num_episodes=500, batch_size=32, update_freq=50, save_freq=100, e
         if total_reward > best_reward:
             best_reward = total_reward
             best_episode_actions = episode_actions
+            best_episode_number = episode  # Add this line
 
         if episode % save_freq == 0:
             for i, agent in enumerate(agents):
@@ -161,13 +167,21 @@ def train_idqn(num_episodes=500, batch_size=32, update_freq=50, save_freq=100, e
     for i, agent in enumerate(agents):
         agent.save(f'models/best_agent_{i}.pth')
 
-    save_best_episode(env.initial_positions, best_episode_actions)
-    return agents, best_episode_actions
+    save_best_episode(env.initial_positions, best_episode_actions, best_episode_number)  # Modify this line
+    save_final_positions(env, best_episode_actions)
+    visualize_and_record_best_strategy(env, best_episode_actions)
+    return agents, best_episode_actions, best_episode_number  # Modify this line
 
-def save_best_episode(initial_positions, best_episode_actions, filename='best_episode.json'):
+
+
+
+def save_best_episode(initial_positions, best_episode_actions, best_episode_number, filename='idqn_best_strategy.json'):
     action_map = ['forward', 'backward', 'left', 'right', 'stay']
     
-    best_episode = {}
+    best_episode = {
+        "episode_number": best_episode_number
+    }
+    
     for i in range(len(initial_positions)):
         best_episode[f'agent_{i}'] = {
             'actions': [action_map[action[i]] for action in best_episode_actions],
@@ -179,21 +193,51 @@ def save_best_episode(initial_positions, best_episode_actions, filename='best_ep
 
     print(f"Best episode actions and initial positions saved to {filename}")
 
-def visualize_best_strategy(env, best_episode_actions):
+
+
+
+def save_final_positions(env, best_episode_actions, filename='idqn_final_positions.png'):
     fig, ax = plt.subplots(figsize=(10, 10))
-    state = env.reset()
+    env.reset()
     
-    for step, actions in enumerate(best_episode_actions):
-        state, reward, done, _ = env.step(actions)
-        env.render(ax, actions=actions, step=step)
-        plt.pause(0.5)
-        if done:
-            break
+    for actions in best_episode_actions:
+        env.step(actions)
     
-    plt.show()
+    env.render(ax, actions=best_episode_actions[-1], step=len(best_episode_actions)-1)
+    plt.title("Final Positions")
+    plt.savefig(filename)
+    plt.close(fig)
+    print(f"Final positions saved as {filename}")
+
+
+
+
+
+
+def visualize_and_record_best_strategy(env, best_episode_actions, filename='idqn_best_episode.mp4'):
+    fig, ax = plt.subplots(figsize=(10, 10))
+    env.reset()
+    
+    # Set up the video writer
+    writer = FFMpegWriter(fps=2)
+    
+    with writer.saving(fig, filename, dpi=100):
+        for step, actions in enumerate(best_episode_actions):
+            env.step(actions)
+            ax.clear()
+            env.render(ax, actions=actions, step=step)
+            writer.grab_frame()
+            plt.pause(0.1)
+    
+    plt.close(fig)
+    print(f"Best episode visualization saved as {filename}")
+
+
+
 
 if __name__ == "__main__":
-    trained_agents, best_episode_actions = train_idqn()
+    trained_agents, best_episode_actions, best_episode_number = train_idqn()
+    print(f"Best episode: {best_episode_number}")
     env = MultiAgentGridEnv(
         grid_file='grid_world.json',
         coverage_radius=7,
@@ -201,4 +245,3 @@ if __name__ == "__main__":
         num_agents=4,
         initial_positions=[(1, 1), (2, 1), (1, 2), (2, 2)]
     )
-    visualize_best_strategy(env, best_episode_actions)

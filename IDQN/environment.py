@@ -207,9 +207,12 @@ class MultiAgentGridEnv:
 
 
 
-    def render(self, ax=None, actions=None, step=None):
+    def render(self, ax=None, actions=None, step=None, return_rgb=False):
         if ax is None:
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(10, 10))
+        else:
+            fig = ax.figure
+        
         ax.clear()
         ax.set_xlim(0, self.grid_size)
         ax.set_ylim(0, self.grid_size)
@@ -220,38 +223,54 @@ class MultiAgentGridEnv:
                 rect = plt.Rectangle((j, i), 1, 1, color='black')
                 ax.add_patch(rect)
         
-        # Draw the coverage area for each agent
-        for pos in self.agent_positions:
+        # Define consistent colors for 4 agents
+        agent_colors = ['red', 'blue', 'green', 'yellow']
+        
+        # Draw the coverage area and agents
+        for idx, pos in enumerate(self.agent_positions):
             x, y = pos
+            agent_color = agent_colors[idx]
+            
+            # Draw coverage area
             for dx in range(-self.coverage_radius, self.coverage_radius + 1):
                 for dy in range(-self.coverage_radius, self.coverage_radius + 1):
                     nx, ny = x + dx, y + dy
                     if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size and self.grid[ny, nx] == 0:
-                        rect = plt.Rectangle((nx, ny), 1, 1, color='blue', alpha=0.3)
+                        rect = plt.Rectangle((nx, ny), 1, 1, color=agent_color, alpha=0.3)
                         ax.add_patch(rect)
-        
-        # Draw the agents
-        for pos in self.agent_positions:
-            x, y = pos
-            rect = plt.Rectangle((x, y), 1, 1, color='red')
+            
+            # Draw the agent
+            rect = plt.Rectangle((x, y), 1, 1, color=agent_color)
             ax.add_patch(rect)
+            
+            # Add agent number
+            ax.text(x + 0.5, y + 0.5, str(idx + 1), color='black', ha='center', va='center', fontweight='bold')
         
         # Display sensor readings
         sensor_readings = self.get_sensor_readings()
         for agent_idx, pos in enumerate(self.agent_positions):
             readings = sensor_readings[agent_idx]
-            ax.text(pos[0] + 0.5, pos[1] + 0.5, f'{readings}', color='white', ha='center', va='center')
+            ax.text(pos[0] + 0.5, pos[1] - 0.3, f'{readings}', color='red', ha='center', va='center', fontsize=8)
 
         ax.grid(True)
         if actions is not None:
             action_texts = ['forward', 'backward', 'left', 'right', 'stay']
-            action_display = ', '.join([action_texts[action] for action in actions])
-            title = f'Actions: {action_display}'
+            action_display = ', '.join([f"Agent {i+1}: {action_texts[action]}" for i, action in enumerate(actions)])
+            title = f'{action_display}'
             if step is not None:
                 title += f' | Step: {step}'
-            ax.set_title(title)
-        plt.draw()
-        plt.pause(0.001)
+            ax.set_title(title, fontsize=10)
+        
+        if return_rgb:
+            fig.canvas.draw()
+            image = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+            image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            plt.close(fig)
+            return image
+        else:
+            plt.draw()
+            plt.pause(0.001)
+
 
 
 

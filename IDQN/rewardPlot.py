@@ -31,5 +31,5 @@ plt.legend()
 plt.grid(True)
 
 # Save the plot
-plt.savefig('reward_plot.png')
+plt.savefig('idqn_reward_plot.png')
 plt.show()
