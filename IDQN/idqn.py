@@ -103,7 +103,7 @@ class IDQNAgent:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.epsilon = checkpoint['epsilon']
 
-def train_idqn(num_episodes=25, batch_size=32, update_freq=50, save_freq=100, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
+def train_idqn(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
     env = MultiAgentGridEnv(
         grid_file='grid_world.json',
         coverage_radius=7,
