@@ -255,7 +255,7 @@ class MultiAgentGridEnv:
         ax.grid(True)
         if actions is not None:
             action_texts = ['forward', 'backward', 'left', 'right', 'stay']
-            action_display = '| '.join([f"Agent {i+1}: {action_texts[action]}" for i, action in enumerate(actions)])
+            action_display = ' | '.join([f"Agent {i+1}: {action_texts[action]}" for i, action in enumerate(actions)])
             title = f'{action_display}'
             if step is not None:
                 title += f' || Step: {step}'

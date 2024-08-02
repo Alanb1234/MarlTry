@@ -48,9 +48,8 @@ class MultiAgentGridEnv:
         self.agent_positions = new_positions
         self.update_coverage()
         global_reward = self.calculate_global_reward()
-        individual_rewards = global_reward / self.num_agents
         done = self.current_step >= self.max_steps_per_episode
-        return self.get_observations(), individual_rewards, done, actual_actions
+        return self.get_observations(), global_reward, done, actual_actions
 
 
     def is_valid_move(self, new_pos, sensor_reading, action, other_new_positions):
@@ -254,7 +253,7 @@ class MultiAgentGridEnv:
         ax.grid(True)
         if actions is not None:
             action_texts = ['forward', 'backward', 'left', 'right', 'stay']
-            action_display = '| '.join([f"Agent {i+1}: {action_texts[action]}" for i, action in enumerate(actions)])
+            action_display = ' | '.join([f"Agent {i+1}: {action_texts[action]}" for i, action in enumerate(actions)])
             title = f'{action_display}'
             if step is not None:
                 title += f' || Step: {step}'

@@ -86,15 +86,15 @@ class VDNAgent:
         states = [torch.FloatTensor(np.array(state)) for state in zip(*states)]
         next_states = [torch.FloatTensor(np.array(next_state)) for next_state in zip(*next_states)]
         actions = [torch.LongTensor(action) for action in zip(*actions)]
-        rewards = torch.FloatTensor(rewards).unsqueeze(1)  # Add this line
-        dones = torch.FloatTensor(dones).unsqueeze(1)  # Add this line
+        rewards = torch.FloatTensor(rewards).unsqueeze(1)  
+        dones = torch.FloatTensor(dones).unsqueeze(1)  
 
         current_q_values = [self.q_networks[i](states[i]).gather(1, actions[i].unsqueeze(1)).squeeze(1) 
                             for i in range(self.num_agents)]
-        current_q_total = self.mixer(torch.stack(current_q_values, dim=1))  # Change this line
+        current_q_total = self.mixer(torch.stack(current_q_values, dim=1))  
 
         next_q_values = [self.target_networks[i](next_states[i]).max(1)[0] for i in range(self.num_agents)]
-        next_q_total = self.target_mixer(torch.stack(next_q_values, dim=1))  # Change this line
+        next_q_total = self.target_mixer(torch.stack(next_q_values, dim=1))  
 
         target_q_total = rewards + (1 - dones) * self.gamma * next_q_total
 
