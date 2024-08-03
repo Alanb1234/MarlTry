@@ -48,9 +48,8 @@ class MultiAgentGridEnv:
         self.agent_positions = new_positions
         self.update_coverage()
         global_reward = self.calculate_global_reward()
-        individual_reward = global_reward / self.num_agents
         done = self.current_step >= self.max_steps_per_episode
-        return self.get_observations(), individual_reward, done, actual_actions
+        return self.get_observations(), global_reward, done, actual_actions
 
 
 

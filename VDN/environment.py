@@ -101,7 +101,9 @@ class MultiAgentGridEnv:
 
     def calculate_global_reward(self):
         total_area = np.sum(self.coverage_grid > 0)  # Count cells covered by at least one agent
+        
         overlap_penalty = self.calculate_overlap()
+
         num_components = self.count_connected_components()
         penalty = num_components if num_components == self.num_agents else num_components - 1
         penalty_score = 2 * penalty * (total_area / self.num_agents)
@@ -268,8 +270,3 @@ class MultiAgentGridEnv:
         else:
             plt.draw()
             plt.pause(0.001)
-
-
-
-
-
