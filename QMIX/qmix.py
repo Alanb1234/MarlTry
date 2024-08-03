@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
+
 import numpy as np
 from collections import deque
 import random
@@ -27,27 +29,56 @@ class QMIXQNetwork(nn.Module):
         return self.network(x)
 
 class QMIXMixer(nn.Module):
-    def __init__(self, num_agents, state_dim):
+    def __init__(self, num_agents, state_dim, embed_dim=32, hypernet_layers=1):
         super(QMIXMixer, self).__init__()
         self.num_agents = num_agents
         self.state_dim = state_dim
-        self.embed_dim = 32
-        self.hyper_w_1 = nn.Linear(state_dim, num_agents * self.embed_dim)
-        self.hyper_w_final = nn.Linear(state_dim, self.embed_dim)
+        self.embed_dim = embed_dim
+
+        if hypernet_layers == 1:
+            self.hyper_w_1 = nn.Linear(state_dim, embed_dim * num_agents)
+            self.hyper_w_final = nn.Linear(state_dim, embed_dim)
+        elif hypernet_layers == 2:
+            hypernet_embed = embed_dim
+            self.hyper_w_1 = nn.Sequential(
+                nn.Linear(state_dim, hypernet_embed),
+                nn.ReLU(),
+                nn.Linear(hypernet_embed, embed_dim * num_agents)
+            )
+            self.hyper_w_final = nn.Sequential(
+                nn.Linear(state_dim, hypernet_embed),
+                nn.ReLU(),
+                nn.Linear(hypernet_embed, embed_dim)
+            )
+        else:
+            raise ValueError("hypernet_layers must be either 1 or 2")
+
+        self.hyper_b_1 = nn.Linear(state_dim, embed_dim)
+        self.V = nn.Sequential(
+            nn.Linear(state_dim, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, 1)
+        )
 
     def forward(self, agent_qs, states):
         bs = agent_qs.size(0)
         states = states.reshape(-1, self.state_dim)
         agent_qs = agent_qs.view(-1, 1, self.num_agents)
-        # First layer
+
         w1 = torch.abs(self.hyper_w_1(states))
+        b1 = self.hyper_b_1(states)
         w1 = w1.view(-1, self.num_agents, self.embed_dim)
-        hidden = torch.bmm(agent_qs, w1).view(-1, self.embed_dim)
-        # Second layer
+        b1 = b1.view(-1, 1, self.embed_dim)
+        hidden = F.elu(torch.bmm(agent_qs, w1) + b1)
+
         w_final = torch.abs(self.hyper_w_final(states))
-        y = torch.bmm(hidden.unsqueeze(1), w_final.unsqueeze(2)).squeeze()
-        
-        return y.view(bs, -1)
+        w_final = w_final.view(-1, self.embed_dim, 1)
+        v = self.V(states).view(-1, 1, 1)
+
+        y = torch.bmm(hidden, w_final) + v
+        q_tot = y.view(bs, -1, 1)
+        return q_tot
+
 
 
 class QMIXAgent:
@@ -59,14 +90,17 @@ class QMIXAgent:
         self.target_networks = [QMIXQNetwork(state_size, action_size) for _ in range(num_agents)]
         for i in range(num_agents):
             self.target_networks[i].load_state_dict(self.q_networks[i].state_dict())
-        self.mixer = QMIXMixer(num_agents, state_size * num_agents)
-        self.target_mixer = QMIXMixer(num_agents, state_size * num_agents)
+        self.mixer = QMIXMixer(num_agents, state_size * num_agents, embed_dim=32, hypernet_layers=2)
+        self.target_mixer = QMIXMixer(num_agents, state_size * num_agents, embed_dim=32, hypernet_layers=2)
         self.target_mixer.load_state_dict(self.mixer.state_dict())
-        self.optimizers = [optim.Adam(net.parameters(), lr=learning_rate) for net in self.q_networks]
-        self.mixer_optimizer = optim.Adam(self.mixer.parameters(), lr=learning_rate)
+        self.optimizer = optim.Adam(list(self.mixer.parameters()) + 
+                                    [p for net in self.q_networks for p in net.parameters()], 
+                                    lr=learning_rate)
         self.gamma = gamma
         self.epsilon = epsilon
         self.memory = deque(maxlen=10000)
+
+
 
     def act(self, states, sensor_readings):
         actions = []
@@ -107,22 +141,22 @@ class QMIXAgent:
 
         current_q_values = torch.stack([self.q_networks[i](states[i]).gather(1, actions[i].unsqueeze(1)).squeeze(1) 
                             for i in range(self.num_agents)], dim=1)
-        current_q_total = self.mixer(current_q_values, torch.cat(states, dim=1))
+        current_q_total = self.mixer(current_q_values, torch.cat(states, dim=1)).squeeze(-1)
 
-        next_q_values = torch.stack([self.target_networks[i](next_states[i]).max(1)[0] for i in range(self.num_agents)], dim=1)
-        next_q_total = self.target_mixer(next_q_values, torch.cat(next_states, dim=1))
+        with torch.no_grad():
+            next_q_values = torch.stack([self.target_networks[i](next_states[i]).max(1)[0] for i in range(self.num_agents)], dim=1)
+            next_q_total = self.target_mixer(next_q_values, torch.cat(next_states, dim=1)).squeeze(-1)
 
         target_q_total = rewards + (1 - dones) * self.gamma * next_q_total
 
-        loss = nn.MSELoss()(current_q_total, target_q_total)
+        loss = F.mse_loss(current_q_total, target_q_total)
         
-        for optimizer in self.optimizers:
-            optimizer.zero_grad()
-        self.mixer_optimizer.zero_grad()
+        self.optimizer.zero_grad()
         loss.backward()
-        for optimizer in self.optimizers:
-            optimizer.step()
-        self.mixer_optimizer.step()
+        torch.nn.utils.clip_grad_norm_(self.mixer.parameters(), 1)
+        for net in self.q_networks:
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1)
+        self.optimizer.step()
 
 
     def update_target_network(self):
@@ -136,10 +170,11 @@ class QMIXAgent:
             'target_networks_state_dict': [net.state_dict() for net in self.target_networks],
             'mixer_state_dict': self.mixer.state_dict(),
             'target_mixer_state_dict': self.target_mixer.state_dict(),
-            'optimizers_state_dict': [opt.state_dict() for opt in self.optimizers],
-            'mixer_optimizer_state_dict': self.mixer_optimizer.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
             'epsilon': self.epsilon,
         }, path)
+
+
 
     def load(self, path):
         checkpoint = torch.load(path)
@@ -149,9 +184,7 @@ class QMIXAgent:
             net.load_state_dict(checkpoint['target_networks_state_dict'][i])
         self.mixer.load_state_dict(checkpoint['mixer_state_dict'])
         self.target_mixer.load_state_dict(checkpoint['target_mixer_state_dict'])
-        for i, opt in enumerate(self.optimizers):
-            opt.load_state_dict(checkpoint['optimizers_state_dict'][i])
-        self.mixer_optimizer.load_state_dict(checkpoint['mixer_optimizer_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.epsilon = checkpoint['epsilon']
 
 def train_qmix(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
