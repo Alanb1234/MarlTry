@@ -15,179 +15,169 @@ from environment import MultiAgentGridEnv
 import json
 
 class QMIXQNetwork(nn.Module):
-    def __init__(self, input_size, output_size):
+    def __init__(self, state_size, action_size):
         super(QMIXQNetwork, self).__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_size, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, output_size)
-        )
+        self.fc1 = nn.Linear(state_size, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, action_size)
 
-    def forward(self, x):
-        return self.network(x)
+    def forward(self, state):
+        x = F.relu(self.fc1(state))
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)
+
 
 class QMIXMixer(nn.Module):
-    def __init__(self, num_agents, state_dim, embed_dim=32, hypernet_layers=1):
+    def __init__(self, num_agents, state_dim):
         super(QMIXMixer, self).__init__()
         self.num_agents = num_agents
         self.state_dim = state_dim
-        self.embed_dim = embed_dim
-
-        if hypernet_layers == 1:
-            self.hyper_w_1 = nn.Linear(state_dim, embed_dim * num_agents)
-            self.hyper_w_final = nn.Linear(state_dim, embed_dim)
-        elif hypernet_layers == 2:
-            hypernet_embed = embed_dim
-            self.hyper_w_1 = nn.Sequential(
-                nn.Linear(state_dim, hypernet_embed),
-                nn.ReLU(),
-                nn.Linear(hypernet_embed, embed_dim * num_agents)
-            )
-            self.hyper_w_final = nn.Sequential(
-                nn.Linear(state_dim, hypernet_embed),
-                nn.ReLU(),
-                nn.Linear(hypernet_embed, embed_dim)
-            )
-        else:
-            raise ValueError("hypernet_layers must be either 1 or 2")
-
-        self.hyper_b_1 = nn.Linear(state_dim, embed_dim)
-        self.V = nn.Sequential(
-            nn.Linear(state_dim, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, 1)
-        )
+        self.embed_dim = 32
+        self.hyper_w_1 = nn.Linear(state_dim, self.embed_dim * num_agents)
+        self.hyper_w_final = nn.Linear(state_dim, self.embed_dim)
 
     def forward(self, agent_qs, states):
         bs = agent_qs.size(0)
         states = states.reshape(-1, self.state_dim)
         agent_qs = agent_qs.view(-1, 1, self.num_agents)
-
+        
         w1 = torch.abs(self.hyper_w_1(states))
-        b1 = self.hyper_b_1(states)
         w1 = w1.view(-1, self.num_agents, self.embed_dim)
-        b1 = b1.view(-1, 1, self.embed_dim)
-        hidden = F.elu(torch.bmm(agent_qs, w1) + b1)
-
+        hidden = F.elu(torch.bmm(agent_qs, w1))
+        
         w_final = torch.abs(self.hyper_w_final(states))
         w_final = w_final.view(-1, self.embed_dim, 1)
-        v = self.V(states).view(-1, 1, 1)
-
-        y = torch.bmm(hidden, w_final) + v
+        
+        y = torch.bmm(hidden, w_final)
         q_tot = y.view(bs, -1, 1)
+        
         return q_tot
+    
 
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+
+    def sample(self, batch_size):
+        return random.sample(self.buffer, batch_size)
+
+    def __len__(self):
+        return len(self.buffer)
 
 
 class QMIXAgent:
-    def __init__(self, state_size, action_size, num_agents, learning_rate=0.001, gamma=0.99, epsilon=1.0):
+    def __init__(self, state_size, action_size, num_agents, learning_rate=0.001, gamma=0.99, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
         self.state_size = state_size
         self.action_size = action_size
         self.num_agents = num_agents
-        self.q_networks = [QMIXQNetwork(state_size, action_size) for _ in range(num_agents)]
-        self.target_networks = [QMIXQNetwork(state_size, action_size) for _ in range(num_agents)]
-        for i in range(num_agents):
-            self.target_networks[i].load_state_dict(self.q_networks[i].state_dict())
-        self.mixer = QMIXMixer(num_agents, state_size * num_agents, embed_dim=32, hypernet_layers=2)
-        self.target_mixer = QMIXMixer(num_agents, state_size * num_agents, embed_dim=32, hypernet_layers=2)
-        self.target_mixer.load_state_dict(self.mixer.state_dict())
-        self.optimizer = optim.Adam(list(self.mixer.parameters()) + 
-                                    [p for net in self.q_networks for p in net.parameters()], 
-                                    lr=learning_rate)
         self.gamma = gamma
-        self.epsilon = epsilon
-        self.memory = deque(maxlen=10000)
+        self.epsilon = epsilon_start
+        self.epsilon_min = epsilon_min
+        self.epsilon_decay = epsilon_decay
+        self.epsilon_start = epsilon_start
+        
+        self.q_networks = nn.ModuleList([QMIXQNetwork(state_size, action_size) for _ in range(num_agents)])
+        self.target_q_networks = nn.ModuleList([QMIXQNetwork(state_size, action_size) for _ in range(num_agents)])
+        self.mixer = QMIXMixer(num_agents, state_size * num_agents)
+        self.target_mixer = QMIXMixer(num_agents, state_size * num_agents)
 
+        self.optimizer = optim.Adam(list(self.q_networks.parameters()) + list(self.mixer.parameters()), lr=learning_rate)
+        self.memory = ReplayBuffer(10000)
 
+        self.update_target_network()
 
-    def act(self, states, sensor_readings):
+    def act(self, states):
         actions = []
-        for i in range(self.num_agents):
-            if random.random() < self.epsilon:
-                actions.append(random.randrange(self.action_size))
-            else:
+        for i, state in enumerate(states):
+            if random.random() > self.epsilon:
+                state = torch.FloatTensor(state).unsqueeze(0)
                 with torch.no_grad():
-                    state = torch.FloatTensor(states[i]).unsqueeze(0)
-                    action_values = self.q_networks[i](state).squeeze(0)
-                    mask = np.zeros(self.action_size, dtype=float)
-                    for j, reading in enumerate(sensor_readings[i]):
-                        if reading == 1:
-                            mask[j] = float('-inf')
-                    masked_action_values = action_values.cpu().numpy() + mask
-                    valid_action_indices = np.where(mask == 0)[0]
-                    if len(valid_action_indices) == 0:
-                        actions.append(self.action_size - 1)
-                    else:
-                        best_action_index = valid_action_indices[np.argmax(masked_action_values[valid_action_indices])]
-                        actions.append(best_action_index)
+                    q_values = self.q_networks[i](state)
+                action = q_values.max(1)[1].item()
+            else:
+                action = random.randrange(self.action_size)
+            actions.append(action)
         return actions
 
-    def remember(self, states, actions, reward, next_states, done):
-        self.memory.append((states, actions, reward, next_states, done))
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.push(state, action, reward, next_state, done)
 
     def replay(self, batch_size):
         if len(self.memory) < batch_size:
             return
-        minibatch = random.sample(self.memory, batch_size)
-        states, actions, rewards, next_states, dones = zip(*minibatch)
+        
+        batch = self.memory.sample(batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
 
-        states = [torch.FloatTensor(np.array(state)) for state in zip(*states)]
-        next_states = [torch.FloatTensor(np.array(next_state)) for next_state in zip(*next_states)]
-        actions = [torch.LongTensor(action) for action in zip(*actions)]
+        # Convert to numpy arrays first
+        states = np.array(states)
+        next_states = np.array(next_states)
+        
+        # Then convert to tensors
+        states = torch.FloatTensor(states)
+        actions = torch.LongTensor(actions)
         rewards = torch.FloatTensor(rewards).unsqueeze(1)
+        next_states = torch.FloatTensor(next_states)
         dones = torch.FloatTensor(dones).unsqueeze(1)
 
-        current_q_values = torch.stack([self.q_networks[i](states[i]).gather(1, actions[i].unsqueeze(1)).squeeze(1) 
-                            for i in range(self.num_agents)], dim=1)
-        current_q_total = self.mixer(current_q_values, torch.cat(states, dim=1)).squeeze(-1)
+
+        current_q_values = [self.q_networks[i](states[:, i]) for i in range(self.num_agents)]
+        current_q_values = torch.stack([values.gather(1, actions[:, i].unsqueeze(1)) for i, values in enumerate(current_q_values)], dim=1)
 
         with torch.no_grad():
-            next_q_values = torch.stack([self.target_networks[i](next_states[i]).max(1)[0] for i in range(self.num_agents)], dim=1)
-            next_q_total = self.target_mixer(next_q_values, torch.cat(next_states, dim=1)).squeeze(-1)
+            next_q_values = [self.target_q_networks[i](next_states[:, i]) for i in range(self.num_agents)]
+            next_q_values = torch.stack([values.max(1)[0] for values in next_q_values], dim=1)
 
-        target_q_total = rewards + (1 - dones) * self.gamma * next_q_total
+        current_q_total = self.mixer(current_q_values, states.view(batch_size, -1)).squeeze(-1)
+        next_q_total = self.target_mixer(next_q_values.unsqueeze(2), next_states.view(batch_size, -1)).squeeze(-1)
 
-        loss = F.mse_loss(current_q_total, target_q_total)
-        
+        expected_q_total = rewards + self.gamma * next_q_total * (1 - dones)
+
+        loss = F.mse_loss(current_q_total, expected_q_total)
+
+
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.mixer.parameters(), 1)
-        for net in self.q_networks:
-            torch.nn.utils.clip_grad_norm_(net.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 1)
         self.optimizer.step()
 
+        return loss.item()
 
     def update_target_network(self):
-        for i in range(self.num_agents):
-            self.target_networks[i].load_state_dict(self.q_networks[i].state_dict())
+        for q_network, target_q_network in zip(self.q_networks, self.target_q_networks):
+            target_q_network.load_state_dict(q_network.state_dict())
         self.target_mixer.load_state_dict(self.mixer.state_dict())
 
+    def parameters(self):
+        return list(self.q_networks.parameters()) + list(self.mixer.parameters())
+    
     def save(self, path):
         torch.save({
             'q_networks_state_dict': [net.state_dict() for net in self.q_networks],
-            'target_networks_state_dict': [net.state_dict() for net in self.target_networks],
+            'target_q_networks_state_dict': [net.state_dict() for net in self.target_q_networks],
             'mixer_state_dict': self.mixer.state_dict(),
             'target_mixer_state_dict': self.target_mixer.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'epsilon': self.epsilon,
         }, path)
 
-
-
     def load(self, path):
         checkpoint = torch.load(path)
         for i, net in enumerate(self.q_networks):
             net.load_state_dict(checkpoint['q_networks_state_dict'][i])
-        for i, net in enumerate(self.target_networks):
-            net.load_state_dict(checkpoint['target_networks_state_dict'][i])
+        for i, net in enumerate(self.target_q_networks):
+            net.load_state_dict(checkpoint['target_q_networks_state_dict'][i])
         self.mixer.load_state_dict(checkpoint['mixer_state_dict'])
         self.target_mixer.load_state_dict(checkpoint['target_mixer_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.epsilon = checkpoint['epsilon']
 
-def train_qmix(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
+
+
+def train_qmix(num_episodes=600, batch_size=32, update_freq=100, save_freq=100, epsilon_start=1.0, epsilon_min=0.00, epsilon_decay=0.005):
     env = MultiAgentGridEnv(
         grid_file='grid_world.json',
         coverage_radius=7,
@@ -197,63 +187,78 @@ def train_qmix(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, e
     )
     state_size = env.get_obs_size()
     action_size = env.get_total_actions()
-    qmix_agent = QMIXAgent(state_size, action_size, env.num_agents, epsilon=epsilon_start)
+    num_agents = env.num_agents
+
+    agent = QMIXAgent(state_size, action_size, num_agents, epsilon_start=epsilon_start)
 
     os.makedirs('models', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
 
-    episode_rewards = []
-    best_reward = float('-inf')
+    scores = []
+    best_score = float('-inf')
     best_episode_actions = None
+    best_episode_hidden_states = None
     best_episode_number = None
 
     for episode in range(num_episodes):
         state = env.reset()
-        total_reward = 0
+        score = 0
         done = False
         episode_actions = []
+        episode_hidden_states = []
 
         while not done:
-            sensor_readings = env.get_sensor_readings()
-            actions = qmix_agent.act(state, sensor_readings)
-            next_state, reward, done, actual_actions = env.step(actions)
-            episode_actions.append(actual_actions)
-
-            qmix_agent.remember(state, actual_actions, reward, next_state, done)
-            qmix_agent.replay(batch_size)
-
+            action = agent.act(state)
+            next_state, reward, done, _ = env.step(action)
+            agent.remember(state, action, reward, next_state, done)
             state = next_state
-            total_reward += reward
+            score += reward
+
+            episode_actions.append(action)
+            episode_hidden_states.append([None] * num_agents)
+
+            loss = agent.replay(batch_size)
 
         if episode % update_freq == 0:
-            qmix_agent.update_target_network()
+            agent.update_target_network()
 
-        qmix_agent.epsilon = max(epsilon_min, epsilon_start * np.exp(-epsilon_decay * episode))
+        scores.append(score)
+        agent.epsilon = max(epsilon_min, epsilon_start * np.exp(-epsilon_decay * episode))
 
-        episode_rewards.append(total_reward)
-        print(f"Episode {episode}, Total Reward: {total_reward}, Epsilon: {qmix_agent.epsilon}")
+        print(f"Episode {episode}, Score: {score}, Epsilon: {agent.epsilon}")
 
-        if total_reward > best_reward:
-            best_reward = total_reward
+        if score > best_score:
+            best_score = score
             best_episode_actions = episode_actions
+            best_episode_hidden_states = episode_hidden_states
             best_episode_number = episode
 
         if episode % save_freq == 0:
-            qmix_agent.save(f'models/qmix_agent_episode_{episode}.pth')
+            agent.save(f'models/qmix_agent_episode_{episode}.pth')
 
         with open('logs/rewards.txt', 'a') as f:
-            f.write(f"{episode},{total_reward}\n")
+            f.write(f"{episode},{score}\n")
 
-    qmix_agent.save('models/best_qmix_agent.pth')
+    agent.save('models/best_qmix_agent.pth')
 
-    save_best_episode(env.initial_positions, best_episode_actions, best_episode_number)
+    save_best_episode(env.initial_positions, best_episode_actions, best_episode_hidden_states, best_episode_number)
     save_final_positions(env, best_episode_actions)
-    visualize_and_record_best_strategy(env, best_episode_actions)
-    return qmix_agent, best_episode_actions, best_episode_number
+    visualize_and_record_best_strategy(env, best_episode_actions, best_episode_hidden_states)
+
+    return agent, scores, best_episode_actions, best_episode_hidden_states, best_episode_number
 
 
 
-def save_best_episode(initial_positions, best_episode_actions, best_episode_number, filename='vdn_best_strategy.json'):
+
+
+
+
+
+
+
+
+
+def save_best_episode(initial_positions, best_episode_actions, best_episode_hidden_states, best_episode_number, filename='qmix_best_strategy.json'):
     action_map = ['forward', 'backward', 'left', 'right', 'stay']
     
     best_episode = {
@@ -263,13 +268,15 @@ def save_best_episode(initial_positions, best_episode_actions, best_episode_numb
     for i in range(len(initial_positions)):
         best_episode[f'agent_{i}'] = {
             'actions': [action_map[action[i]] for action in best_episode_actions],
-            'initial_position': initial_positions[i]
+            'initial_position': initial_positions[i],
+            'hidden_states': [h[i].tolist() for h in best_episode_hidden_states]
         }
     
     with open(filename, 'w') as f:
         json.dump(best_episode, f, indent=4)
 
-    print(f"Best episode actions and initial positions saved to {filename}")
+    print(f"Best episode actions, initial positions, and hidden states saved to {filename}")
+
 
 
 
@@ -288,7 +295,7 @@ def save_final_positions(env, best_episode_actions, filename='vdn_final_position
 
 
 
-def visualize_and_record_best_strategy(env, best_episode_actions, filename='vdn_best_episode.mp4'):
+def visualize_and_record_best_strategy(env, best_episode_actions, best_episode_hidden_states, filename='qmix_best_episode.mp4'):
     fig, ax = plt.subplots(figsize=(10, 10))
     env.reset()
     
@@ -296,7 +303,7 @@ def visualize_and_record_best_strategy(env, best_episode_actions, filename='vdn_
     writer = FFMpegWriter(fps=2)
     
     with writer.saving(fig, filename, dpi=100):
-        for step, actions in enumerate(best_episode_actions):
+        for step, (actions, hidden_states) in enumerate(zip(best_episode_actions, best_episode_hidden_states)):
             env.step(actions)
             ax.clear()
             env.render(ax, actions=actions, step=step)
@@ -306,11 +313,11 @@ def visualize_and_record_best_strategy(env, best_episode_actions, filename='vdn_
     plt.close(fig)
     print(f"Best episode visualization saved as {filename}")
 
-# The helper functions save_best_episode, save_final_positions, and visualize_and_record_best_strategy remain the same
 
 if __name__ == "__main__":
-    trained_qmix_agent, best_episode_actions, best_episode_number = train_qmix()
+    trained_qmix_agent, scores, best_episode_actions, best_episode_hidden_states, best_episode_number = train_qmix()
     print(f"Best episode: {best_episode_number}")
+    
     env = MultiAgentGridEnv(
         grid_file='grid_world.json',
         coverage_radius=7,

@@ -40,7 +40,7 @@ plt.plot(qtran_episodes, qtran_rewards, alpha=0.3, color='black', label='QTRAN')
 plt.plot(idqn_episodes[window_size-1:], idqn_avg, color='blue', linewidth=2, label='IDQN 20-ep avg')
 plt.plot(vdn_episodes[window_size-1:], vdn_avg, color='red', linewidth=2, label='VDN 20-ep avg')
 plt.plot(qmix_episodes[window_size-1:], qmix_avg, color='green', linewidth=2, label='QMIX 20-ep avg')
-plt.plot(qtran_episodes[window_size-1:], qtran_avg, color='black', linewidth=2, label='qtran 20-ep avg')
+plt.plot(qtran_episodes[window_size-1:], qtran_avg, color='black', linewidth=2, label='QTRAN 20-ep avg')
 
 plt.xlabel('Episode')
 plt.ylabel('Reward')
