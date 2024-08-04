@@ -44,12 +44,12 @@ plt.plot(qtran_episodes[window_size-1:], qtran_avg, color='black', linewidth=2, 
 
 plt.xlabel('Episode')
 plt.ylabel('Reward')
-plt.title('IDQN vs VDN vs QMIX')
+plt.title('MARL_Algorithms_Comparison')
 plt.legend()
 plt.grid(True, alpha=0.3)
 
 # Save the plot
-plt.savefig('idqn_vs_vdn_vs_qmix_rewards.png', dpi=300, bbox_inches='tight')
+plt.savefig('MARL_Algorithms_Comparison.png', dpi=300, bbox_inches='tight')
 plt.show()
 
-print("Plot saved as 'idqn_vs_vdn_vs_qmix_rewards.png'")
+print("Plot saved as 'MARL_Algorithms_Comparison.png'")
