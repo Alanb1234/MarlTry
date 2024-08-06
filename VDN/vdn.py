@@ -150,7 +150,7 @@ def train_vdn(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, ep
     os.makedirs('logs', exist_ok=True)
 
     episode_rewards = []
-    best_reward = float('-inf')
+    best_episode_reward = float('-inf')
     best_episode_actions = None
     best_episode_number = None  
     for episode in range(num_episodes):
@@ -179,8 +179,8 @@ def train_vdn(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, ep
         episode_rewards.append(total_reward)
         print(f"Episode {episode}, Total Reward: {total_reward}, Epsilon: {vdn_agent.epsilon}")
 
-        if total_reward > best_reward:
-            best_reward = total_reward
+        if total_reward > best_episode_reward:
+            best_episode_reward = total_reward
             best_episode_actions = episode_actions
             best_episode_number = episode  
 
@@ -192,7 +192,7 @@ def train_vdn(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, ep
 
     vdn_agent.save('models/best_vdn_agent.pth')
 
-    save_best_episode(env.initial_positions, best_episode_actions, best_episode_number)  
+    save_best_episode(env.initial_positions, best_episode_actions, best_episode_number,best_episode_reward)  
     save_final_positions(env, best_episode_actions)
     visualize_and_record_best_strategy(env, best_episode_actions)
     return vdn_agent, best_episode_actions, best_episode_number  
@@ -200,11 +200,13 @@ def train_vdn(num_episodes=600, batch_size=32, update_freq=50, save_freq=100, ep
 # The helper functions save_best_episode, save_final_positions, and visualize_and_record_best_strategy 
 
 
-def save_best_episode(initial_positions, best_episode_actions, best_episode_number, filename='vdn_best_strategy.json'):
+def save_best_episode(initial_positions, best_episode_actions, best_episode_number,best_episode_reward , filename='vdn_best_strategy.json'):
     action_map = ['forward', 'backward', 'left', 'right', 'stay']
     
     best_episode = {
-        "episode_number": best_episode_number
+        "episode_number": int(best_episode_number),  # Convert to int if it's np.int64
+        "episode_reward": float(best_episode_reward)  # Convert to float if it's np.float64
+
     }
     
     for i in range(len(initial_positions)):
@@ -257,10 +259,4 @@ def visualize_and_record_best_strategy(env, best_episode_actions, filename='vdn_
 if __name__ == "__main__":
     trained_vdn_agent, best_episode_actions, best_episode_number = train_vdn()
     print(f"Best episode: {best_episode_number}")
-    env = MultiAgentGridEnv(
-        grid_file='grid_world.json',
-        coverage_radius=7,
-        max_steps_per_episode=100,
-        num_agents=4,
-        initial_positions=[(1, 1), (2, 1), (1, 2), (2, 2)]
-    )
+ #
